@@ -1,6 +1,6 @@
 {
   "name": "dsh-codebuddy-auth",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "CodeBuddy (Tencent IOA) as a native DeepSeek Harness llm provider: browser OAuth login, token auto-renewal, credential storage, and /v3/config model sync.",
   "type": "module",
   "main": "lib/index.js",
