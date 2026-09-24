@@ -16,6 +16,7 @@ const HARNESS = process.env.DSH_HARNESS_DIR
 const MAP = {
   '@deepseek-ai/dsh-llm': `${HARNESS}/dsh-llm/lib/index.js`,
   '@deepseek-ai/dsh-timeout': `${HARNESS}/dsh-timeout/lib/index.js`,
+  '@deepseek-ai/dsh-attachment': `${HARNESS}/dsh-attachment/lib/index.js`,
 };
 
 export async function resolve(specifier, context, next) {

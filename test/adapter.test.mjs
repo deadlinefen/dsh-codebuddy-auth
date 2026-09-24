@@ -234,7 +234,17 @@ test('reasoning_effort is omitted for off and none, passed through otherwise', (
   assert.equal(req('none').reasoning_effort, undefined);
   assert.equal(req('').reasoning_effort, undefined);
   assert.equal(req('low').reasoning_effort, 'low');
-  assert.equal(req('HIGH').reasoning_effort, 'HIGH');
+});
+
+test('reasoning_effort normalizes case and the Extra high display name', () => {
+  const req = (e) => serializeRequest({ model: 'm', messages: [], reasoningEffort: e }, true, undefined);
+  // The catalog spells efforts in lowercase and the live plane rejects a
+  // casing mismatch with HTTP 400 (code 11150); config accepts a bare string,
+  // so a display name can arrive here.
+  assert.equal(req('Max').reasoning_effort, 'max');
+  assert.equal(req('HIGH').reasoning_effort, 'high');
+  assert.equal(req('  Low  ').reasoning_effort, 'low');
+  assert.equal(req('Extra high').reasoning_effort, 'xhigh');
 });
 
 test('tools are mapped to the function shape only when present', () => {

@@ -48,11 +48,62 @@ function credentialsPath() {
  * YAML library: the file is a plain top-level mapping, so line-level surgery
  * with JSON-string quoting (a YAML double-quoted scalar) is exact.
  */
+/**
+ * Insert or replace one ref inside a credentials document.
+ *
+ * The document is the provider's v1 layout: the only legal top-level keys are
+ * `version`, `refs`, and `records`, and every ref lives indented under `refs:`.
+ * Writing a bare top-level `${key}:` line — which a flat pre-release layout
+ * allowed — makes the whole file unparseable, and the credentials service is a
+ * required plugin, so DSH then fails to start rather than merely losing a token.
+ *
+ * An existing value may be a folded multi-line scalar; the continuation lines
+ * are removed along with the key so no fragment of the old token survives.
+ * A document without a top-level `refs:` is refused rather than guessed at.
+ *
+ * @param text - current file contents (empty for a new file).
+ * @param key - ref name, e.g. CODEBUDDY_ACCESS_TOKEN.
+ * @param value - new secret.
+ * @returns the rewritten document.
+ * @throws when the document is not the v1 layout this writer understands.
+ */
 export function upsertCredentialLine(text, key, value) {
-  const lines = text.length ? text.replace(/\n$/, '').split('\n') : [];
-  const out = lines.filter((l) => !l.startsWith(`${key}:`));
-  out.push(`${key}: ${JSON.stringify(value)}`);
-  return `${out.join('\n')}\n`;
+  if (text.trim().length === 0) return `version: 1\nrefs:\n  ${key}: ${JSON.stringify(value)}\n`;
+
+  const lines = text.replace(/\n+$/, '').split('\n');
+  const refsIndex = lines.findIndex((l) => /^refs:\s*(\{\s*\})?\s*$/.test(l));
+  if (refsIndex < 0) {
+    throw new Error(
+      `login-flow: refusing to write ${key}: the credentials document has no top-level "refs:" mapping `
+      + '(expected the provider v1 layout: version / refs / records).',
+    );
+  }
+
+  // `refs: {}` is an empty flow mapping: indented block entries cannot follow
+  // it, so the braces are replaced by the mapping form before inserting.
+  if (/^refs:\s*\{\s*\}\s*$/.test(lines[refsIndex])) lines[refsIndex] = 'refs:';
+
+  // The refs block runs until the next top-level key.
+  let end = lines.length;
+  for (let i = refsIndex + 1; i < lines.length; i += 1) {
+    if (/^[A-Za-z0-9_-]+:/.test(lines[i])) { end = i; break; }
+  }
+
+  const body = lines.slice(refsIndex + 1, end);
+  const kept = [];
+  for (let i = 0; i < body.length; i += 1) {
+    const line = body[i];
+    const m = line.match(/^\s+([A-Za-z0-9_-]+):/);
+    if (m && m[1] === key) {
+      // Drop the key line and any folded continuation lines that follow it.
+      while (i + 1 < body.length && /^\s+\S/.test(body[i + 1]) && !/^\s+[A-Za-z0-9_-]+:/.test(body[i + 1])) i += 1;
+      continue;
+    }
+    kept.push(line);
+  }
+  kept.push(`  ${key}: ${JSON.stringify(value)}`);
+
+  return [...lines.slice(0, refsIndex + 1), ...kept, ...lines.slice(end)].join('\n') + '\n';
 }
 
 /** Persist both tokens; returns the path written. */

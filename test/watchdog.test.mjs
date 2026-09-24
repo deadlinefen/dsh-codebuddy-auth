@@ -255,7 +255,7 @@ test('an image request without the attachment service fails clearly', async () =
   assert.ok(error);
 });
 
-test('offloadImages is a no-op when nothing exceeds the budget', () => {
+test('projectImages passes an under-budget history through unchanged', () => {
   const adapter = new CodebuddyAdapter({
     getAccessToken: async () => 't',
     connection: () => ({}),
@@ -264,6 +264,108 @@ test('offloadImages is a no-op when nothing exceeds the budget', () => {
     resolveAttachments: () => ({ imageHostPath: () => undefined }),
   });
   const messages = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
-  const out = adapter.offloadImages(messages);
-  assert.equal(out, messages, 'an under-budget request should pass through unchanged');
+  // Compared by structure, not identity: the projection maps over every message.
+  assert.deepEqual(adapter.projectImages(messages, new Map()), messages);
+});
+
+test('projectImages renders the occurrences the host marked offloaded', () => {
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [],
+    identityFromToken: () => ({}),
+    resolveAttachments: () => ({ imageHostPath: () => '/tmp/x' }),
+  });
+  const offloaded = {
+    type: 'image',
+    offloaded: true,
+    attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png', bytes: 10 },
+  };
+  const out = adapter.projectImages([{ role: 'user', content: [offloaded] }], new Map());
+  assert.equal(out[0].content[0].type, 'text', 'an offloaded occurrence must become text');
+});
+
+test('projectImages demands host offload once the inline budget is exceeded', () => {
+  // One image larger than the whole inline budget: the route must report the
+  // count rather than silently dropping bytes, so the host can log the
+  // omission and retry.
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [],
+    identityFromToken: () => ({}),
+    resolveAttachments: () => ({ imageHostPath: () => '/tmp/x' }),
+  });
+  const attachment = { attachmentId: 'sha256:big', mediaType: 'image/png', bytes: 10 };
+  const messages = [{ role: 'user', content: [{ type: 'image', attachment }] }];
+  // Any length above the route's 64 MiB inline budget.
+  const versions = new Map([['sha256:big', { bytes: 64 * 1024 * 1024 + 1 }]]);
+  assert.throws(
+    () => adapter.projectImages(messages, versions),
+    (e) => e.code === 'IMAGE_OFFLOAD_REQUIRED' && e.failure.offloadImages >= 1,
+  );
+});
+
+// ------------------------------------------------- image offload protocol
+
+test('projectImages skips a fully offloaded history without demanding more', () => {
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [],
+    identityFromToken: () => ({}),
+    resolveAttachments: () => ({ imageHostPath: () => '/tmp/x' }),
+  });
+  // Every occurrence already marked: requiredImageOffload must count zero, or a
+  // retried request would loop forever demanding offloads that already happened.
+  const messages = [{
+    role: 'user',
+    content: [{ type: 'image', offloaded: true, attachment: { attachmentId: 'sha256:a', mediaType: 'image/png', bytes: 1 } }],
+  }];
+  const versions = new Map([['sha256:a', { bytes: 64 * 1024 * 1024 + 1 }]]);
+  assert.doesNotThrow(() => adapter.projectImages(messages, versions));
+});
+
+test('prepareImages ignores images the host already offloaded', async () => {
+  let reads = 0;
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [],
+    identityFromToken: () => ({}),
+    resolveAttachments: () => ({
+      imageHostPath: () => '/tmp/x',
+      readImageRequest: async () => { reads++; return { bytes: 1, mediaType: 'image/webp' }; },
+    }),
+  });
+  const out = await adapter.prepareImages({
+    messages: [{
+      role: 'user',
+      content: [{ type: 'image', offloaded: true, attachment: { attachmentId: 'sha256:a', mediaType: 'image/png', width: 10, height: 10, bytes: 1 } }],
+    }],
+  }, undefined);
+  // Nothing retained => nothing to read, so the text-only path stays offline.
+  assert.equal(out, undefined);
+  assert.equal(reads, 0);
+});
+
+test('an over-budget image produces the code the host retries on', () => {
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [],
+    identityFromToken: () => ({}),
+    resolveAttachments: () => ({ imageHostPath: () => '/tmp/x' }),
+  });
+  const attachment = { attachmentId: 'sha256:big', mediaType: 'image/png', width: 4000, height: 4000, bytes: 10 };
+  try {
+    adapter.projectImages([{ role: 'user', content: [{ type: 'image', attachment }] }],
+      new Map([['sha256:big', { bytes: 64 * 1024 * 1024 + 1 }]]));
+    assert.fail('expected IMAGE_OFFLOAD_REQUIRED');
+  } catch (error) {
+    // The host plugin matches on exactly these two facts.
+    assert.equal(error.code, 'IMAGE_OFFLOAD_REQUIRED');
+    assert.equal(typeof error.failure.offloadImages, 'number');
+    assert.ok(error.failure.offloadImages > 0);
+  }
 });
