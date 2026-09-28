@@ -369,3 +369,71 @@ test('an over-budget image produces the code the host retries on', () => {
     assert.ok(error.failure.offloadImages > 0);
   }
 });
+
+// ------------------------------------------------------- model display name
+
+test('the price multiplier rides in the display name', async () => {
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [
+      { id: 'a', name: 'Model A', credits: 'x0.29', maxInputTokens: 1000, maxOutputTokens: 100 },
+    ],
+    identityFromToken: () => ({}),
+  });
+  const listed = await adapter.listModels('codebuddy');
+  assert.equal(listed[0].name, 'Model A (x0.29)');
+  // The id must stay bare: it is what a choice is keyed by.
+  assert.equal(listed[0].id, 'a');
+});
+
+test('a model the catalog prices nothing for keeps a bare name', async () => {
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [
+      { id: 'auto', name: 'Auto', maxInputTokens: 1000, maxOutputTokens: 100 },
+    ],
+    identityFromToken: () => ({}),
+  });
+  const listed = await adapter.listModels('codebuddy');
+  assert.equal(listed[0].name, 'Auto');
+});
+
+test('a name that repeats is disambiguated with its id', async () => {
+  // The real catalog calls both of these "Hy3" while charging x0.00 and x0.05;
+  // rendering them identically would hide the difference the label exists for.
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [
+      { id: 'hy3', name: 'Hy3', credits: 'x0.00', maxInputTokens: 1000, maxOutputTokens: 100 },
+      { id: 'hy3-x', name: 'Hy3', credits: 'x0.05', maxInputTokens: 1000, maxOutputTokens: 100 },
+      { id: 'other', name: 'Other', credits: 'x1.00', maxInputTokens: 1000, maxOutputTokens: 100 },
+    ],
+    identityFromToken: () => ({}),
+  });
+  const listed = await adapter.listModels('codebuddy');
+  const byId = Object.fromEntries(listed.map((m) => [m.id, m.name]));
+  assert.equal(byId.hy3, 'Hy3 · hy3 (x0.00)');
+  assert.equal(byId['hy3-x'], 'Hy3 · hy3-x (x0.05)');
+  // A unique name is left alone.
+  assert.equal(byId.other, 'Other (x1.00)');
+});
+
+test('resolveModel names a model the same way listModels does', async () => {
+  const adapter = new CodebuddyAdapter({
+    getAccessToken: async () => 't',
+    connection: () => ({}),
+    readCatalog: async () => [
+      { id: 'hy3', name: 'Hy3', credits: 'x0.00', maxInputTokens: 1000, maxOutputTokens: 100 },
+      { id: 'hy3-x', name: 'Hy3', credits: 'x0.05', maxInputTokens: 1000, maxOutputTokens: 100 },
+    ],
+    identityFromToken: () => ({}),
+  });
+  const listed = await adapter.listModels('codebuddy');
+  const resolved = await adapter.resolveModel('codebuddy', 'hy3-x', undefined);
+  const fromList = listed.find((m) => m.id === 'hy3-x').name;
+  assert.equal(resolved.name, fromList);
+  assert.equal(resolved.name, 'Hy3 · hy3-x (x0.05)');
+});
